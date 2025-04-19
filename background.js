@@ -381,6 +381,7 @@ chrome.notifications.onClicked.addListener(function (id) {
 chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
   if (request.action === "updatePrefs") {
     setPrefs(request.prefs);
+    return true; // Indicate async response (or async operation)
   }
 });
 
@@ -397,18 +398,19 @@ function updatePomodoroStatus() {
   // Check if runtime is available (service worker might be terminating)
   if (chrome.runtime && chrome.runtime.id) {
     // Broadcast the status to any open options pages
-    try {
-      chrome.runtime.sendMessage({
-        action: "pomodoroUpdate",
-        status: status
-      }, function(response) {
-        // Handle response if needed (or ignore runtime errors with empty callback)
-      });
-    } catch (error) {
-      // Suppress the "Receiving end does not exist" error
-      // This happens normally when no options pages are open
-      console.log("No receivers for status update, this is normal");
-    }
+    chrome.runtime.sendMessage({
+      action: "pomodoroUpdate",
+      status: status
+    }, function(response) {
+      // If chrome.runtime.lastError is set, it means the receiving end
+      // (options page) didn't exist. We can safely ignore this.
+      if (chrome.runtime.lastError) {
+        // Optional: You could log a specific message here for debugging
+        // console.log("Options page not listening: ", chrome.runtime.lastError.message);
+      } else {
+        // Handle successful response if needed
+      }
+    });
   }
 }
 
