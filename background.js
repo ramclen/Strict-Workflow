@@ -394,11 +394,22 @@ function updatePomodoroStatus() {
   
   chrome.storage.local.set({pomodoroStatus: status});
   
-  // Broadcast the status to any open options pages
-  chrome.runtime.sendMessage({
-    action: "pomodoroUpdate",
-    status: status
-  });
+  // Check if runtime is available (service worker might be terminating)
+  if (chrome.runtime && chrome.runtime.id) {
+    // Broadcast the status to any open options pages
+    try {
+      chrome.runtime.sendMessage({
+        action: "pomodoroUpdate",
+        status: status
+      }, function(response) {
+        // Handle response if needed (or ignore runtime errors with empty callback)
+      });
+    } catch (error) {
+      // Suppress the "Receiving end does not exist" error
+      // This happens normally when no options pages are open
+      console.log("No receivers for status update, this is normal");
+    }
+  }
 }
 
 // Add status tracking to the pomodoro object
