@@ -8,12 +8,14 @@ var PREFS = null,
 BADGE_BACKGROUND_COLORS = {
   work: [192, 0, 0, 255],
   break: [0, 192, 0, 255]
-}, RING = new Audio("ring.ogg"),
+}, 
+// We can't use Audio API in a service worker, so we'll use a different approach
+// for playing sounds
 ringLoaded = false;
 
 // Load preferences first
 loadPrefs().then(() => {
-  loadRingIfNecessary();
+  console.log('Preferences loaded');
 });
 
 function defaultPrefs() {
@@ -98,19 +100,19 @@ async function savePrefs(prefs) {
 
 async function setPrefs(prefs) {
   PREFS = await savePrefs(prefs);
-  loadRingIfNecessary();
   return prefs;
 }
 
-function loadRingIfNecessary() {
-  console.log('is ring necessary?');
-  if(PREFS.shouldRing && !ringLoaded) {
-    console.log('ring is necessary');
-    RING.onload = function () {
-      console.log('ring loaded');
-      ringLoaded = true;
-    }
-    RING.load();
+// Function to play sound by creating a new tab that plays the sound
+function playSound() {
+  if (PREFS && PREFS.shouldRing) {
+    // We'll create a notification tab that plays the sound and then closes itself
+    chrome.tabs.create({
+      url: chrome.runtime.getURL('play-sound.html'),
+      active: false
+    }, tab => {
+      // Tab will self-close after playing sound
+    });
   }
 }
 
@@ -328,8 +330,8 @@ var notification, mainPomodoro = new Pomodoro({
       }
       
       if(PREFS.shouldRing) {
-        console.log("playing ring", RING);
-        RING.play();
+        console.log("playing ring");
+        playSound();
       }
     },
     onStart: function (timer) {

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Sound Player</title>
+  <script>
+    // Play the sound and close the tab when done
+    document.addEventListener('DOMContentLoaded', function() {
+      const audio = new Audio('ring.ogg');
+      
+      // Close the tab after playing
+      audio.onended = function() {
+        window.close();
+      };
+      
+      // Add a fallback if tab doesn't close automatically
+      setTimeout(function() {
+        window.close();
+      }, 3000); // 3 seconds timeout
+      
+      // Play the sound
+      audio.play();
+    });
+  </script>
+</head>
+<body style="background-color: #f7f7f7; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0;">
+  <div style="text-align: center;">
+    <p>Playing timer sound...</p>
+    <p><small>This tab will close automatically.</small></p>
+  </div>
+</body>
+</html> 
