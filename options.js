@@ -28,13 +28,51 @@ var form = document.getElementById('options-form'),
   clickRestartsEl = document.getElementById('click-restarts'),
   saveSuccessfulEl = document.getElementById('save-successful'),
   timeFormatErrorEl = document.getElementById('time-format-error'),
-  background = chrome.extension.getBackgroundPage(),
-  startCallbacks = {}, durationEls = {};
+  startCallbacks = {}, durationEls = {}, 
+  PREFS = null,
+  mainPomodoroStatus = { running: false, mostRecentMode: 'break' };
   
 durationEls['work'] = document.getElementById('work-duration');
 durationEls['break'] = document.getElementById('break-duration');
 
 var TIME_REGEX = /^([0-9]+)(:([0-9]{2}))?$/;
+
+// Load data from storage
+function loadOptions() {
+  chrome.storage.local.get(['prefs', 'pomodoroStatus'], function(result) {
+    PREFS = result.prefs;
+    if (result.pomodoroStatus) {
+      mainPomodoroStatus = result.pomodoroStatus;
+    }
+    
+    // Update form values
+    siteListEl.value = PREFS.siteList.join("\n");
+    showNotificationsEl.checked = PREFS.showNotifications;
+    shouldRingEl.checked = PREFS.shouldRing;
+    clickRestartsEl.checked = PREFS.clickRestarts;
+    whitelistEl.selectedIndex = PREFS.whitelist ? 1 : 0;
+
+    var duration, minutes, seconds;
+    for(var key in durationEls) {
+      duration = PREFS.durations[key];
+      seconds = duration % 60;
+      minutes = (duration - seconds) / 60;
+      if(seconds >= 10) {
+        durationEls[key].value = minutes + ":" + seconds;
+      } else if(seconds > 0) {
+        durationEls[key].value = minutes + ":0" + seconds;
+      } else {
+        durationEls[key].value = minutes;
+      }
+      durationEls[key].onfocus = formAltered;
+    }
+    
+    // Set UI state based on Pomodoro status
+    if(mainPomodoroStatus.mostRecentMode == 'work' && mainPomodoroStatus.running) {
+      startCallbacks.work();
+    }
+  });
+}
 
 form.onsubmit = function () {
   console.log("form submitted");
@@ -57,15 +95,24 @@ form.onsubmit = function () {
   
   console.log(durations);
   
-  background.setPrefs({
-    siteList:           siteListEl.value.split(/\r?\n/),
-    durations:          durations,
-    showNotifications:  showNotificationsEl.checked,
-    shouldRing:         shouldRingEl.checked,
-    clickRestarts:      clickRestartsEl.checked,
-    whitelist:          whitelistEl.selectedIndex == 1
-  })
-  saveSuccessfulEl.className = 'show';
+  var newPrefs = {
+    siteList: siteListEl.value.split(/\r?\n/),
+    durations: durations,
+    showNotifications: showNotificationsEl.checked,
+    shouldRing: shouldRingEl.checked,
+    clickRestarts: clickRestartsEl.checked,
+    whitelist: whitelistEl.selectedIndex == 1
+  };
+  
+  // Save to storage
+  chrome.storage.local.set({prefs: newPrefs}, function() {
+    PREFS = newPrefs;
+    saveSuccessfulEl.className = 'show';
+    
+    // Send message to background script to update settings
+    chrome.runtime.sendMessage({action: "updatePrefs", prefs: newPrefs});
+  });
+  
   return false;
 }
 
@@ -78,27 +125,6 @@ whitelistEl.onchange = formAltered;
 function formAltered() {
   saveSuccessfulEl.removeAttribute('class');
   timeFormatErrorEl.removeAttribute('class');
-}
-
-siteListEl.value = background.PREFS.siteList.join("\n");
-showNotificationsEl.checked = background.PREFS.showNotifications;
-shouldRingEl.checked = background.PREFS.shouldRing;
-clickRestartsEl.checked = background.PREFS.clickRestarts;
-whitelistEl.selectedIndex = background.PREFS.whitelist ? 1 : 0;
-
-var duration, minutes, seconds;
-for(var key in durationEls) {
-  duration = background.PREFS.durations[key];
-  seconds = duration % 60;
-  minutes = (duration - seconds) / 60;
-  if(seconds >= 10) {
-    durationEls[key].value = minutes + ":" + seconds;
-  } else if(seconds > 0) {
-    durationEls[key].value = minutes + ":0" + seconds;
-  } else {
-    durationEls[key].value = minutes;
-  }
-  durationEls[key].onfocus = formAltered;
 }
 
 function setInputDisabled(state) {
@@ -119,6 +145,17 @@ startCallbacks.break = function () {
   setInputDisabled(false);
 }
 
-if(background.mainPomodoro.mostRecentMode == 'work') {
-  startCallbacks.work();
-}
+// Listen for updates from background
+chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
+  if (request.action === "pomodoroUpdate") {
+    mainPomodoroStatus = request.status;
+    if (request.status.mostRecentMode === 'work' && request.status.running) {
+      startCallbacks.work();
+    } else {
+      startCallbacks.break();
+    }
+  }
+});
+
+// Initialize options
+document.addEventListener('DOMContentLoaded', loadOptions);

@@ -4,14 +4,19 @@
 
 */
 
-var PREFS = loadPrefs(),
+var PREFS = null,
 BADGE_BACKGROUND_COLORS = {
   work: [192, 0, 0, 255],
   break: [0, 192, 0, 255]
-}, RING = new Audio("ring.ogg"),
+}, 
+// We can't use Audio API in a service worker, so we'll use a different approach
+// for playing sounds
 ringLoaded = false;
 
-loadRingIfNecessary();
+// Load preferences first
+loadPrefs().then(() => {
+  console.log('Preferences loaded');
+});
 
 function defaultPrefs() {
   return {
@@ -37,16 +42,25 @@ function defaultPrefs() {
     },
     shouldRing: true,
     clickRestarts: false,
-    whitelist: false
+    whitelist: false,
+    showNotifications: true
   }
 }
 
-function loadPrefs() {
-  if(typeof localStorage['prefs'] !== 'undefined') {
-    return updatePrefsFormat(JSON.parse(localStorage['prefs']));
-  } else {
-    return savePrefs(defaultPrefs());
-  }
+async function loadPrefs() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get('prefs', (result) => {
+      if(result.prefs) {
+        PREFS = updatePrefsFormat(result.prefs);
+        resolve(PREFS);
+      } else {
+        savePrefs(defaultPrefs()).then(prefs => {
+          PREFS = prefs;
+          resolve(PREFS);
+        });
+      }
+    });
+  });
 }
 
 function updatePrefsFormat(prefs) {
@@ -76,26 +90,29 @@ function updatePrefsFormat(prefs) {
   return prefs;
 }
 
-function savePrefs(prefs) {
-  localStorage['prefs'] = JSON.stringify(prefs);
+async function savePrefs(prefs) {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({prefs: prefs}, () => {
+      resolve(prefs);
+    });
+  });
+}
+
+async function setPrefs(prefs) {
+  PREFS = await savePrefs(prefs);
   return prefs;
 }
 
-function setPrefs(prefs) {
-  PREFS = savePrefs(prefs);
-  loadRingIfNecessary();
-  return prefs;
-}
-
-function loadRingIfNecessary() {
-  console.log('is ring necessary?');
-  if(PREFS.shouldRing && !ringLoaded) {
-    console.log('ring is necessary');
-    RING.onload = function () {
-      console.log('ring loaded');
-      ringLoaded = true;
-    }
-    RING.load();
+// Function to play sound by creating a new tab that plays the sound
+function playSound() {
+  if (PREFS && PREFS.shouldRing) {
+    // We'll create a notification tab that plays the sound and then closes itself
+    chrome.tabs.create({
+      url: chrome.runtime.getURL('play-sound.html'),
+      active: false
+    }, tab => {
+      // Tab will self-close after playing sound
+    });
   }
 }
 
@@ -269,21 +286,24 @@ function isLocationBlocked(location) {
 function executeInTabIfBlocked(action, tab) {
   var file = "content_scripts/" + action + ".js", location;
   location = tab.url.split('://');
+  
+  // Skip if URL doesn't have the expected format
+  if (location.length < 2) return;
+  
   location = parseLocation(location[1]);
   
   if(isLocationBlocked(location)) {
-    chrome.tabs.executeScript(tab.id, {file: file});
+    chrome.scripting.executeScript({
+      target: {tabId: tab.id},
+      files: [file]
+    });
   }
 }
 
 function executeInAllBlockedTabs(action) {
-  var windows = chrome.windows.getAll({populate: true}, function (windows) {
-    var tabs, tab, domain, listedDomain;
-    for(var i in windows) {
-      tabs = windows[i].tabs;
-      for(var j in tabs) {
-        executeInTabIfBlocked(action, tabs[j]);
-      }
+  chrome.tabs.query({}, function (tabs) {
+    for(var j in tabs) {
+      executeInTabIfBlocked(action, tabs[j]);
     }
   });
 }
@@ -292,10 +312,10 @@ var notification, mainPomodoro = new Pomodoro({
   getDurations: function () { return PREFS.durations },
   timer: {
     onEnd: function (timer) {
-      chrome.browserAction.setIcon({
+      chrome.action.setIcon({
         path: ICONS.ACTION.PENDING[timer.pomodoro.nextMode]
       });
-      chrome.browserAction.setBadgeText({text: ''});
+      chrome.action.setBadgeText({text: ''});
       
       if(PREFS.showNotifications) {
         var nextModeName = chrome.i18n.getMessage(timer.pomodoro.nextMode);
@@ -310,15 +330,15 @@ var notification, mainPomodoro = new Pomodoro({
       }
       
       if(PREFS.shouldRing) {
-        console.log("playing ring", RING);
-        RING.play();
+        console.log("playing ring");
+        playSound();
       }
     },
     onStart: function (timer) {
-      chrome.browserAction.setIcon({
+      chrome.action.setIcon({
         path: ICONS.ACTION.CURRENT[timer.type]
       });
-      chrome.browserAction.setBadgeBackgroundColor({
+      chrome.action.setBadgeBackgroundColor({
         color: BADGE_BACKGROUND_COLORS[timer.type]
       });
       if(timer.type == 'work') {
@@ -326,22 +346,14 @@ var notification, mainPomodoro = new Pomodoro({
       } else {
         executeInAllBlockedTabs('unblock');
       }
-      if(notification) notification.cancel();
-      var tabViews = chrome.extension.getViews({type: 'tab'}), tab;
-      for(var i in tabViews) {
-        tab = tabViews[i];
-        if(typeof tab.startCallbacks !== 'undefined') {
-          tab.startCallbacks[timer.type]();
-        }
-      }
     },
     onTick: function (timer) {
-      chrome.browserAction.setBadgeText({text: timer.timeRemainingString()});
+      chrome.action.setBadgeText({text: timer.timeRemainingString()});
     }
   }
 });
 
-chrome.browserAction.onClicked.addListener(function (tab) {
+chrome.action.onClicked.addListener(function (tab) {
   if(mainPomodoro.running) { 
       if(PREFS.clickRestarts) {
           mainPomodoro.restart();
@@ -364,3 +376,59 @@ chrome.notifications.onClicked.addListener(function (id) {
     chrome.windows.update(window.id, {focused: true});
   });
 });
+
+// Add listener for messages from options page
+chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
+  if (request.action === "updatePrefs") {
+    setPrefs(request.prefs);
+    return true; // Indicate async response (or async operation)
+  }
+});
+
+// Update status in storage whenever the pomodoro status changes
+function updatePomodoroStatus() {
+  const status = {
+    running: mainPomodoro.running,
+    mostRecentMode: mainPomodoro.mostRecentMode,
+    nextMode: mainPomodoro.nextMode
+  };
+  
+  chrome.storage.local.set({pomodoroStatus: status});
+  
+  // Check if runtime is available (service worker might be terminating)
+  if (chrome.runtime && chrome.runtime.id) {
+    // Broadcast the status to any open options pages
+    chrome.runtime.sendMessage({
+      action: "pomodoroUpdate",
+      status: status
+    }, function(response) {
+      // If chrome.runtime.lastError is set, it means the receiving end
+      // (options page) didn't exist. We can safely ignore this.
+      if (chrome.runtime.lastError) {
+        // Optional: You could log a specific message here for debugging
+        // console.log("Options page not listening: ", chrome.runtime.lastError.message);
+      } else {
+        // Handle successful response if needed
+      }
+    });
+  }
+}
+
+// Add status tracking to the pomodoro object
+const originalStart = mainPomodoro.start;
+mainPomodoro.start = function() {
+  originalStart.apply(this, arguments);
+  updatePomodoroStatus();
+};
+
+const originalRestart = mainPomodoro.restart;
+mainPomodoro.restart = function() {
+  originalRestart.apply(this, arguments);
+  updatePomodoroStatus();
+};
+
+const originalOnTimerEnd = mainPomodoro.onTimerEnd;
+mainPomodoro.onTimerEnd = function(timer) {
+  originalOnTimerEnd.apply(this, arguments);
+  updatePomodoroStatus();
+};
